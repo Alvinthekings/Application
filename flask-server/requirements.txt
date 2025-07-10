@@ -1,0 +1,73 @@
+from flask import Flask, request, jsonify
+import face_recognition
+import numpy as np
+import cv2
+import mysql.connector
+
+app = Flask(__name__)
+
+# Connect to your MySQL
+def load_known_faces():
+    conn = mysql.connector.connect(
+        host='localhost',
+        user='root',
+        password='',
+        database='my_react_native_app'
+    )
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, photo, Grade_level, LRN, section FROM studentd")
+    rows = cursor.fetchall()
+
+    known_encodings = []
+    known_students = []
+
+    for name, photo, grade, lrn, section in rows:
+        if photo:
+            nparr = np.frombuffer(photo, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            encs = face_recognition.face_encodings(img)
+            if encs:
+                known_encodings.append(encs[0])
+                known_students.append({
+                    "name": name,
+                    "Grade_level": grade,
+                    "LRN": lrn,
+                    "section": section
+                })
+
+    cursor.close()
+    conn.close()
+    return known_encodings, known_students
+
+@app.route('/recognize', methods=['POST'])
+def recognize_face():
+    if 'image' not in request.files:
+        return jsonify({"success": False, "message": "No image uploaded"}), 400
+
+    file = request.files['image']
+    np_img = np.frombuffer(file.read(), np.uint8)
+    input_img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+
+    face_locations = face_recognition.face_locations(input_img)
+    face_encodings = face_recognition.face_encodings(input_img, face_locations)
+
+    if not face_encodings:
+        return jsonify({"success": False, "message": "No face found"})
+
+    known_encodings, known_students = load_known_faces()
+
+    for encoding in face_encodings:
+        matches = face_recognition.compare_faces(known_encodings, encoding)
+        distances = face_recognition.face_distance(known_encodings, encoding)
+        if matches:
+            best_idx = np.argmin(distances)
+            if matches[best_idx]:
+                return jsonify({
+                    "success": True,
+                    **known_students[best_idx]
+                })
+
+    return jsonify({"success": False, "message": "No match found"})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
